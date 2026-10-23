@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoExtent Explorer - Interactive Bounding Box & Measurement Studio</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+
+    <!-- Leaflet Draw CSS & JS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+
+    <!-- Turf.js for advanced area and centroid calculations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+
+    <!-- Leaflet Omnivore for GPX support -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-omnivore/0.3.4/leaflet-omnivore.min.js"></script>
+
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+    <style>
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+        .leaflet-draw-toolbar a {
+            background-color: #1e293b !important;
+            color: #f8fafc !important;
+            border-bottom: 1px solid #334155 !important;
+        }
+        .leaflet-draw-toolbar a:hover {
+            background-color: #334155 !important;
+        }
+        .leaflet-draw-actions a {
+            background-color: #0f172a !important;
+            color: #e2e8f0 !important;
+        }
+
+        /* Tool active state highlight */
+        .mode-btn-active {
+            background-color: #4f46e5 !important;
+            color: #ffffff !important;
+            border-color: #6366f1 !important;
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans bg-slate-900 text-slate-100 antialiased overflow-hidden">
+
+    <!-- Header Navigation -->
+    <header class="bg-slate-950 border-b border-slate-800 px-4 py-3 flex items-center justify-between shadow-md z-10 flex-wrap gap-2">
+        <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-earth-asia text-indigo-400 text-xl"></i>
+            <h1 class="text-base font-semibold tracking-wide">GeoExtent Explorer</h1>
+        </div>
+
+        <!-- Mode Selector Switcher -->
+        <div class="flex items-center bg-slate-900 border border-slate-800 p-1 rounded-lg space-x-1">
+            <button id="modeExtentBtn" onclick="window.switchMode('extent')" class="mode-btn-active px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition">
+                <i class="fa-solid fa-vector-square"></i> 1. BBox / Location Tool
+            </button>
+            <button id="modeMeasureBtn" onclick="window.switchMode('measure')" class="text-slate-400 hover:text-white px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition">
+                <i class="fa-solid fa-ruler-combined"></i> 2. Distance & Area Ruler
+            </button>
+        </div>
+
+        <div class="flex items-center space-x-3 text-sm">
+            <label class="cursor-pointer bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center shadow-sm">
+                <i class="fa-solid fa-file-upload mr-2"></i> Upload GPX
+                <input type="file" id="gpxFileInput" accept=".gpx" class="hidden" />
+            </label>
+            <button id="clearAllBtn" class="bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white border border-slate-700 hover:border-rose-600 px-3 py-1.5 rounded-md text-xs font-medium transition flex items-center">
+                <i class="fa-solid fa-trash-can mr-2"></i> Clear All
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <div class="flex-1 flex flex-col md:flex-row relative overflow-hidden">
+        
+        <!-- Left: Interactive Map -->
+        <div class="flex-1 h-full relative" id="mapContainer">
+            <div id="map" class="w-full h-full z-0"></div>
+            
+            <!-- Active Mode Indicator Overlay -->
+            <div id="modeBanner" class="absolute top-3 left-14 bg-slate-950/90 border border-indigo-500/40 text-indigo-200 text-xs px-3 py-1.5 rounded-lg shadow-lg z-[1000] font-medium flex items-center gap-2">
+                <i class="fa-solid fa-circle-info text-indigo-400"></i>
+                <span id="modeBannerText">Active Mode: Location & Bounding Box Extent</span>
+            </div>
+
+            <!-- Mouse Coordinate Tracker -->
+            <div id="coordDisplay" class="absolute bottom-3 left-3 bg-slate-950/85 backdrop-blur-md border border-slate-800 text-slate-300 text-xs px-3 py-1.5 rounded-lg shadow-lg z-[1000] font-mono pointer-events-none">
+                Mouse: Lat --, Lon --
+            </div>
+        </div>
+
+        <!-- Right: Formatting & Output Sidebar -->
+        <aside class="w-full md:w-[460px] bg-slate-900 border-l border-slate-800 flex flex-col h-1/2 md:h-full z-10 shadow-xl">
+            
+            <!-- Sidebar Header & Format Controls -->
+            <div class="p-4 border-b border-slate-800 bg-slate-950/50 space-y-3">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-2">
+                        <i class="fa-solid fa-sliders text-indigo-400"></i>
+                        <h2 class="font-semibold text-slate-200 text-sm">Output Preferences</h2>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button id="selectAllFormats" class="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium hover:underline">Select All</button>
+                        <span class="text-slate-600">|</span>
+                        <button id="deselectAllFormats" class="text-[11px] text-slate-400 hover:text-slate-300 font-medium hover:underline">Deselect All</button>
+                    </div>
+                </div>
+
+                <!-- Checkbox Format Options Grid -->
+                <div class="grid grid-cols-2 gap-2 text-xs bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="geojson" class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>GeoJSON Geometry</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="wkt" class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>WKT POLYGON</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="bbox_csv_lnglat" checked class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>BBOX (minLon, minLat...)</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="bbox_csv_latlng" class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>BBOX (south, west...)</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="coords_array" class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>Coordinates Array</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="leaflet_code" class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>Leaflet [[lat, lon]]</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="centroid" class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>Centroid</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="kml" class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>KML Geometry</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-white">
+                        <input type="checkbox" data-format="overpass" class="format-checkbox rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                        <span>Overpass QL BBOX</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Measurements Output Container (Visible only when measurements exist) -->
+            <div id="measurementsSection" class="p-4 border-b border-slate-800 bg-amber-950/20 hidden space-y-3">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-2">
+                        <i class="fa-solid fa-ruler-combined text-amber-400"></i>
+                        <h3 class="font-semibold text-amber-200 text-xs uppercase tracking-wider">Active Measurements</h3>
+                    </div>
+                    <span id="measureCountBadge" class="bg-amber-900/60 text-amber-300 border border-amber-700/50 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                        0 Items
+                    </span>
+                </div>
+                <div id="measureCardsContainer" class="space-y-2.5 max-h-52 overflow-y-auto pr-1">
+                    <!-- Dynamic ruler/measurement items -->
+                </div>
+            </div>
+
+            <!-- Active Bounding Box Shapes Header -->
+            <div class="px-4 py-2 bg-slate-900 border-b border-slate-800/80 flex items-center justify-between">
+                <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Location Shapes</span>
+                <span id="shapeCountBadge" class="bg-indigo-900/60 text-indigo-300 border border-indigo-700/50 text-[11px] font-bold px-2.5 py-0.5 rounded-full">
+                    1 Shape
+                </span>
+            </div>
+
+            <!-- List of Shapes Output -->
+            <div id="shapesContainer" class="flex-1 overflow-y-auto p-4 space-y-4">
+                <!-- Dynamic cards populated here -->
+            </div>
+
+            <!-- Footer Info -->
+            <div class="p-3 bg-slate-950 border-t border-slate-800 text-[11px] text-slate-500 text-center">
+                Initial Center (Taiwan): <span class="font-mono text-slate-400">[119.1, 21.4, 123.5, 26.1]</span>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="fixed top-16 right-4 bg-indigo-600 text-white px-4 py-2.5 rounded-lg shadow-2xl text-xs font-medium translate-y-[-100px] opacity-0 transition-all duration-300 z-[2000] flex items-center space-x-2 border border-indigo-400/30">
+        <i class="fa-solid fa-circle-check text-emerald-300"></i>
+        <span id="toastMessage">Copied to clipboard!</span>
+    </div>
+
+    <script>
+        const DEFAULT_TAIWAN_BOUNDS = L.latLngBounds(
+            L.latLng(21.4, 119.1), // SW
+            L.latLng(26.1, 123.5)  // NE
+        );
+
+        let shapeCounter = 0;
+        let measureCounter = 0;
+        let currentMode = 'extent'; // 'extent' or 'measure'
+
+        const activeShapes = new Map(); // Spatial Extent shapes
+        const activeMeasures = new Map(); // Distance/Area Ruler items
+
+        // Active format filter visibility (Default: Only BBOX CSV enabled)
+        const activeFormats = {
+            geojson: false,
+            wkt: false,
+            bbox_csv_lnglat: true,
+            bbox_csv_latlng: false,
+            coords_array: false,
+            leaflet_code: false,
+            centroid: false,
+            kml: false,
+            overpass: false
+        };
+
+        // 1. Initialize Map Instance
+        const map = L.map('map').fitBounds(DEFAULT_TAIWAN_BOUNDS, { padding: [30, 30] });
+
+        // 2. High-Reliability Map Tile Providers (No Labels, English & Hybrid)
+        
+        // --- 🛰️ No Labels / Pure Imagery Layers (無標籤底圖) ---
+        const googlePureSatellite = L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+            maxZoom: 20,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+            attribution: '&copy; Google Maps Satellite (No Labels)'
+        });
+
+        const esriPureSatellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 19,
+            attribution: 'Tiles &copy; Esri World Imagery (No Labels)'
+        });
+
+        const googlePureTerrain = L.tileLayer('https://{s}.google.com/vt/lyrs=t&x={x}&y={y}&z={z}', {
+            maxZoom: 20,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+            attribution: '&copy; Google Maps Terrain (No Labels)'
+        });
+
+        // --- 🌐 English / Localized Maps (全英文標示) ---
+        const googleStreetsEnglish = L.tileLayer('https://{s}.google.com/vt/lyrs=m&hl=en&x={x}&y={y}&z={z}', {
+            maxZoom: 20,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+            attribution: '&copy; Google Maps (English)'
+        });
+
+        const googleTerrainEnglish = L.tileLayer('https://{s}.google.com/vt/lyrs=p&hl=en&x={x}&y={y}&z={z}', {
+            maxZoom: 20,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+            attribution: '&copy; Google Maps Terrain (English)'
+        });
+
+        const googleHybridEnglish = L.tileLayer('https://{s}.google.com/vt/lyrs=s,h&hl=en&x={x}&y={y}&z={z}', {
+            maxZoom: 20,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+            attribution: '&copy; Google Maps Satellite Hybrid (English)'
+        });
+
+        const cartoLightEnglish = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            maxZoom: 20,
+            subdomains: 'abcd',
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        });
+
+        // Set default to Google Satellite No Labels
+        googlePureSatellite.addTo(map);
+
+        const baseMaps = {
+            "📷 Google Satellite (No Labels)": googlePureSatellite,
+            "📷 Esri Satellite (No Labels)": esriPureSatellite,
+            "🏔️ Google Terrain Only (No Labels)": googlePureTerrain,
+            "🌐 Google Streets (English)": googleStreetsEnglish,
+            "🏔️ Google Terrain (English)": googleTerrainEnglish,
+            "🛰️ Google Satellite Hybrid (English)": googleHybridEnglish,
+            "🗺️ CARTO Voyager Map (English)": cartoLightEnglish
+        };
+        L.control.layers(baseMaps, null, { position: 'topright' }).addTo(map);
+
+        // Feature Group Layers
+        const drawnItems = new L.FeatureGroup(); // Extent BBoxes & Polygons
+        const measureItems = new L.FeatureGroup(); // Measurement Lines & Polygons
+        map.addLayer(drawnItems);
+        map.addLayer(measureItems);
+
+        // Leaflet Draw Control Instances
+        let drawControlExtent, drawControlMeasure;
+
+        // Attach switchMode to window immediately to guarantee global availability for inline onclick handlers
+        window.switchMode = function(mode) {
+            currentMode = mode;
+            const extentBtn = document.getElementById('modeExtentBtn');
+            const measureBtn = document.getElementById('modeMeasureBtn');
+            const bannerText = document.getElementById('modeBannerText');
+
+            if (!extentBtn || !measureBtn || !bannerText) return;
+
+            if (mode === 'extent') {
+                extentBtn.className = "mode-btn-active px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition";
+                measureBtn.className = "text-slate-400 hover:text-white px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition";
+                bannerText.textContent = "Active Mode: Location & Bounding Box Extent";
+                
+                if (drawControlMeasure) map.removeControl(drawControlMeasure);
+                if (drawControlExtent) map.addControl(drawControlExtent);
+            } else {
+                measureBtn.className = "mode-btn-active px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition";
+                extentBtn.className = "text-slate-400 hover:text-white px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition";
+                bannerText.textContent = "Active Mode: Distance & Area Ruler Tool";
+                
+                if (drawControlExtent) map.removeControl(drawControlExtent);
+                if (drawControlMeasure) map.addControl(drawControlMeasure);
+            }
+        };
+
+        function initDrawControls() {
+            // Extent Tool Options
+            drawControlExtent = new L.Control.Draw({
+                position: 'topleft',
+                draw: {
+                    polyline: false,
+                    circle: false,
+                    marker: false,
+                    circlemarker: false,
+                    rectangle: {
+                        shapeOptions: { color: '#6366f1', weight: 2, fillOpacity: 0.3 }
+                    },
+                    polygon: {
+                        allowIntersection: false,
+                        shapeOptions: { color: '#ec4899', weight: 2, fillOpacity: 0.3 }
+                    }
+                },
+                edit: { featureGroup: drawnItems, remove: true }
+            });
+
+            // Measurement Ruler Options
+            drawControlMeasure = new L.Control.Draw({
+                position: 'topleft',
+                draw: {
+                    rectangle: false,
+                    circle: false,
+                    marker: false,
+                    circlemarker: false,
+                    polyline: {
+                        metric: true,
+                        shapeOptions: { color: '#f59e0b', weight: 3, dashArray: '6, 6' }
+                    },
+                    polygon: {
+                        allowIntersection: false,
+                        showArea: true,
+                        metric: true,
+                        shapeOptions: { color: '#10b981', weight: 3, dashArray: '4, 4', fillOpacity: 0.25 }
+                    }
+                },
+                edit: { featureGroup: measureItems, remove: true }
+            });
+
+            map.addControl(drawControlExtent);
+        }
+
+        initDrawControls();
+
+        // Add Initial Taiwan Rectangle
+        function addInitialTaiwanBox() {
+            const taiwanRectangle = L.rectangle(DEFAULT_TAIWAN_BOUNDS, {
+                color: '#6366f1',
+                weight: 2,
+                fillOpacity: 0.3
+            });
+            drawnItems.addLayer(taiwanRectangle);
+            registerShape(taiwanRectangle, "Rectangle", "Taiwan Bounding Box");
+            map.fitBounds(DEFAULT_TAIWAN_BOUNDS, { padding: [30, 30] });
+        }
+
+        // Register Extent Shapes
+        function registerShape(layer, type, customTitle = null) {
+            shapeCounter++;
+            const layerId = L.stamp(layer);
+            const shapeName = customTitle || `${type} ${shapeCounter}`;
+            
+            activeShapes.set(layerId, {
+                id: layerId,
+                name: shapeName,
+                type: type,
+                layer: layer
+            });
+
+            layer.on('edit', () => renderSidebarShapes());
+            renderSidebarShapes();
+        }
+
+        // Register Measurement Ruler Shapes
+        function registerMeasure(layer, type) {
+            measureCounter++;
+            const layerId = L.stamp(layer);
+            const name = type === 'polyline' ? `Distance Line #${measureCounter}` : `Area Region #${measureCounter}`;
+
+            activeMeasures.set(layerId, {
+                id: layerId,
+                name: name,
+                type: type,
+                layer: layer
+            });
+
+            layer.on('edit', () => renderSidebarMeasures());
+            renderSidebarMeasures();
+        }
+
+        // Draw Events Handler
+        map.on(L.Draw.Event.CREATED, function (e) {
+            const layer = e.layer;
+            const layerType = e.layerType;
+
+            if (currentMode === 'extent') {
+                const type = layerType === 'polygon' ? 'Polygon' : 'Rectangle';
+                drawnItems.addLayer(layer);
+                registerShape(layer, type);
+            } else {
+                measureItems.addLayer(layer);
+                registerMeasure(layer, layerType);
+            }
+        });
+
+        map.on(L.Draw.Event.EDITED, function (e) {
+            renderSidebarShapes();
+            renderSidebarMeasures();
+        });
+
+        map.on(L.Draw.Event.DELETED, function (e) {
+            e.layers.eachLayer(function(layer) {
+                const layerId = L.stamp(layer);
+                activeShapes.delete(layerId);
+                activeMeasures.delete(layerId);
+            });
+            renderSidebarShapes();
+            renderSidebarMeasures();
+        });
+
+        // Mouse Tracker
+        map.on('mousemove', function(e) {
+            document.getElementById('coordDisplay').textContent = `Lat: ${e.latlng.lat.toFixed(5)}, Lon: ${e.latlng.lng.toFixed(5)}`;
+        });
+
+        // Render Measurement Cards in Sidebar
+        function renderSidebarMeasures() {
+            const section = document.getElementById('measurementsSection');
+            const container = document.getElementById('measureCardsContainer');
+            const countBadge = document.getElementById('measureCountBadge');
+
+            container.innerHTML = '';
+            countBadge.textContent = `${activeMeasures.size} ${activeMeasures.size === 1 ? 'Item' : 'Items'}`;
+
+            if (activeMeasures.size === 0) {
+                section.classList.add('hidden');
+                return;
+            }
+
+            section.classList.remove('hidden');
+
+            activeMeasures.forEach((item) => {
+                const layer = item.layer;
+                const geojson = layer.toGeoJSON();
+                let metricsText = "";
+
+                if (item.type === 'polyline') {
+                    const lineDistance = turf.length(geojson, { units: 'kilometers' });
+                    const milesDistance = (lineDistance * 0.621371).toFixed(2);
+                    const metersDistance = (lineDistance * 1000).toFixed(0);
+                    metricsText = `Length: ${lineDistance.toFixed(2)} km (${milesDistance} mi / ${metersDistance} m)`;
+                } else {
+                    const areaSqMeters = turf.area(geojson);
+                    const areaSqKm = (areaSqMeters / 1000000).toFixed(2);
+                    const areaAcres = (areaSqMeters * 0.000247105).toFixed(2);
+                    const areaHectares = (areaSqMeters / 10000).toFixed(2);
+
+                    const poly = turf.polygon(geojson.geometry.coordinates);
+                    const perimeterKm = turf.length(poly, { units: 'kilometers' }).toFixed(2);
+
+                    metricsText = `Area: ${areaSqKm} km² (${areaHectares} ha / ${areaAcres} acres)\nPerimeter: ${perimeterKm} km`;
+                }
+
+                const card = document.createElement('div');
+                card.className = "bg-slate-900 border border-amber-800/60 rounded p-2.5 text-xs font-mono text-amber-200 space-y-1.5 shadow-sm";
+                card.innerHTML = `
+                    <div class="flex items-center justify-between font-sans">
+                        <span class="font-bold text-amber-400 text-xs flex items-center gap-1">
+                            <i class="${item.type === 'polyline' ? 'fa-solid fa-route' : 'fa-solid fa-draw-polygon'} text-xs"></i>
+                            ${item.name}
+                        </span>
+                        <div class="flex items-center space-x-1">
+                            <button onclick="zoomToMeasure('${item.id}')" title="Zoom To" class="p-1 text-slate-400 hover:text-amber-300">
+                                <i class="fa-solid fa-expand text-xs"></i>
+                            </button>
+                            <button onclick="deleteMeasure('${item.id}')" title="Delete" class="p-1 text-slate-400 hover:text-rose-400">
+                                <i class="fa-solid fa-trash-can text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="whitespace-pre-wrap text-[11px] text-slate-300 bg-slate-950 p-1.5 rounded border border-slate-800/80 select-all">${metricsText}</div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Render Location Shapes Cards
+        function renderSidebarShapes() {
+            const container = document.getElementById('shapesContainer');
+            const countBadge = document.getElementById('shapeCountBadge');
+            
+            container.innerHTML = '';
+            countBadge.textContent = `${activeShapes.size} ${activeShapes.size === 1 ? 'Shape' : 'Shapes'}`;
+
+            if (activeShapes.size === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-12 text-slate-500">
+                        <i class="fa-solid fa-draw-polygon text-4xl mb-3 text-slate-600"></i>
+                        <p class="text-sm font-medium text-slate-400">No spatial shapes drawn yet.</p>
+                        <p class="text-xs text-slate-500 mt-1">Use the BBox / Location tool to draw rectangles or polygons.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            activeShapes.forEach((item) => {
+                const layer = item.layer;
+                const geojsonFeature = layer.toGeoJSON();
+                const bounds = layer.getBounds();
+                const sw = bounds.getSouthWest();
+                const ne = bounds.getNorthEast();
+
+                const minLon = sw.lng.toFixed(5);
+                const minLat = sw.lat.toFixed(5);
+                const maxLon = ne.lng.toFixed(5);
+                const maxLat = ne.lat.toFixed(5);
+
+                const latlngs = layer.getLatLngs()[0] || layer.getLatLngs();
+                const coordRingLngLat = latlngs.map(pt => [parseFloat(pt.lng.toFixed(5)), parseFloat(pt.lat.toFixed(5))]);
+                
+                if (coordRingLngLat.length > 0) {
+                    const first = coordRingLngLat[0];
+                    const last = coordRingLngLat[coordRingLngLat.length - 1];
+                    if (first[0] !== last[0] || first[1] !== last[1]) {
+                        coordRingLngLat.push([first[0], first[1]]);
+                    }
+                }
+
+                const turfPoly = turf.polygon([coordRingLngLat]);
+                const centerPt = turf.centroid(turfPoly);
+                const centerLat = centerPt.geometry.coordinates[1].toFixed(5);
+                const centerLon = centerPt.geometry.coordinates[0].toFixed(5);
+
+                const wktRingStr = coordRingLngLat.map(pt => `${pt[0]} ${pt[1]}`).join(', ');
+                const wktPolygon = `POLYGON((${wktRingStr}))`;
+                const kmlCoordsStr = coordRingLngLat.map(pt => `${pt[0]},${pt[1]},0`).join(' ');
+
+                const formatMap = {
+                    geojson: { label: "GeoJSON Geometry", value: JSON.stringify(geojsonFeature.geometry, null, 2) },
+                    wkt: { label: "WKT POLYGON", value: wktPolygon },
+                    bbox_csv_lnglat: { label: "BBOX CSV (minLon, minLat, maxLon, maxLat)", value: `${minLon}, ${minLat}, ${maxLon}, ${maxLat}` },
+                    bbox_csv_latlng: { label: "BBOX CSV (south, west, north, east)", value: `${minLat}, ${minLon}, ${maxLat}, ${maxLon}` },
+                    coords_array: { label: "Coordinates [[Lon, Lat], ...]", value: JSON.stringify(coordRingLngLat) },
+                    leaflet_code: { label: "Leaflet LatLng Array", value: JSON.stringify(latlngs.map(pt => [parseFloat(pt.lat.toFixed(5)), parseFloat(pt.lng.toFixed(5))])) },
+                    centroid: { label: "Centroid Point (Lat, Lon)", value: `${centerLat}, ${centerLon}` },
+                    kml: { label: "KML Polygon Outer Boundary", value: `<Polygon>\n  <outerBoundaryIs>\n    <LinearRing>\n      <coordinates>\n        ${kmlCoordsStr}\n      </coordinates>\n    </LinearRing>\n  </outerBoundaryIs>\n</Polygon>` },
+                    overpass: { label: "Overpass QL BBOX Extent", value: `${minLat},${minLon},${maxLat},${maxLon}` }
+                };
+
+                const card = document.createElement('div');
+                card.className = "bg-slate-950/70 border border-slate-800 rounded-lg p-3.5 shadow-md space-y-3";
+
+                let formatsHTML = '';
+                let visibleCount = 0;
+
+                for (const [key, obj] of Object.entries(formatMap)) {
+                    if (activeFormats[key]) {
+                        visibleCount++;
+                        formatsHTML += `
+                            <div class="space-y-1">
+                                <div class="flex justify-between items-center text-[11px] font-semibold text-slate-400">
+                                    <span>${obj.label}</span>
+                                    <button onclick="copyToClipboard('${escapeJsString(obj.value)}')" class="text-indigo-400 hover:text-indigo-300 text-[10px] font-medium flex items-center gap-1 transition">
+                                        <i class="fa-regular fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                                <div class="bg-slate-900 border border-slate-800 rounded p-2 text-xs font-mono text-slate-200 break-all select-all whitespace-pre-wrap">${escapeHtml(obj.value)}</div>
+                            </div>
+                        `;
+                    }
+                }
+
+                if (visibleCount === 0) {
+                    formatsHTML = `<div class="text-center py-3 text-slate-500 text-xs italic">No formats enabled in sidebar preferences above.</div>`;
+                }
+
+                const badgeColor = item.type === 'Polygon' ? 'bg-pink-900/50 text-pink-300 border-pink-700/50' : 'bg-indigo-900/50 text-indigo-300 border-indigo-700/50';
+
+                card.innerHTML = `
+                    <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${badgeColor}">
+                                ${item.type}
+                            </span>
+                            <h3 class="font-semibold text-slate-200 text-xs">${item.name}</h3>
+                        </div>
+                        <div class="flex items-center space-x-1">
+                            <button onclick="zoomToShape('${item.id}')" title="Zoom to Shape" class="p-1 text-slate-400 hover:text-indigo-400 rounded transition">
+                                <i class="fa-solid fa-expand text-xs"></i>
+                            </button>
+                            <button onclick="deleteShape('${item.id}')" title="Delete Shape" class="p-1 text-slate-400 hover:text-rose-500 rounded transition">
+                                <i class="fa-solid fa-trash-can text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                        ${formatsHTML}
+                    </div>
+                `;
+
+                container.appendChild(card);
+            });
+        }
+
+        // Helpers
+        function escapeJsString(str) {
+            return str.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, '\\n');
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        window.zoomToShape = function(id) {
+            const item = activeShapes.get(Number(id));
+            if (item) map.fitBounds(item.layer.getBounds(), { padding: [30, 30] });
+        };
+
+        window.deleteShape = function(id) {
+            const numericId = Number(id);
+            const item = activeShapes.get(numericId);
+            if (item) {
+                drawnItems.removeLayer(item.layer);
+                activeShapes.delete(numericId);
+                renderSidebarShapes();
+            }
+        };
+
+        window.zoomToMeasure = function(id) {
+            const item = activeMeasures.get(Number(id));
+            if (item) map.fitBounds(item.layer.getBounds(), { padding: [30, 30] });
+        };
+
+        window.deleteMeasure = function(id) {
+            const numericId = Number(id);
+            const item = activeMeasures.get(numericId);
+            if (item) {
+                measureItems.removeLayer(item.layer);
+                activeMeasures.delete(numericId);
+                renderSidebarMeasures();
+            }
+        };
+
+        window.copyToClipboard = function(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                showToast("Copied to clipboard!");
+            } catch (err) {
+                console.error("Copy failed", err);
+            }
+            document.body.removeChild(textarea);
+        };
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toastMessage');
+            toastMsg.textContent = msg;
+            
+            toast.classList.remove('translate-y-[-100px]', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-[-100px]', 'opacity-0');
+            }, 2000);
+        }
+
+        // Checkbox listeners
+        document.querySelectorAll('.format-checkbox').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const formatKey = e.target.dataset.format;
+                activeFormats[formatKey] = e.target.checked;
+                renderSidebarShapes();
+            });
+        });
+
+        document.getElementById('selectAllFormats').addEventListener('click', () => {
+            document.querySelectorAll('.format-checkbox').forEach(cb => {
+                cb.checked = true;
+                activeFormats[cb.dataset.format] = true;
+            });
+            renderSidebarShapes();
+        });
+
+        document.getElementById('deselectAllFormats').addEventListener('click', () => {
+            document.querySelectorAll('.format-checkbox').forEach(cb => {
+                cb.checked = false;
+                activeFormats[cb.dataset.format] = false;
+            });
+            renderSidebarShapes();
+        });
+
+        // Clear All
+        document.getElementById('clearAllBtn').addEventListener('click', function() {
+            drawnItems.clearLayers();
+            measureItems.clearLayers();
+            activeShapes.clear();
+            activeMeasures.clear();
+            renderSidebarShapes();
+            renderSidebarMeasures();
+            showToast("All items cleared!");
+        });
+
+        // GPX File Upload
+        function handleGPXFile(file) {
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const gpxContent = e.target.result;
+                
+                const runLayer = omnivore.gpx.parse(gpxContent, null, L.geoJson(null, {
+                    style: function() {
+                        return { color: '#f43f5e', weight: 4, opacity: 0.85 };
+                    }
+                }));
+
+                runLayer.on('ready', function() {
+                    map.addLayer(runLayer);
+                    const trackBounds = runLayer.getBounds();
+                    map.fitBounds(trackBounds, { padding: [30, 30] });
+
+                    const gpxBox = L.rectangle(trackBounds, {
+                        color: '#10b981',
+                        weight: 2,
+                        fillOpacity: 0.2
+                    });
+                    drawnItems.addLayer(gpxBox);
+                    registerShape(gpxBox, 'Rectangle', `GPX: ${file.name.replace(/\.[^/.]+$/, "")}`);
+
+                    showToast("GPX track & bounding box loaded!");
+                });
+
+                runLayer.on('error', function() {
+                    showToast("Failed to parse GPX file.");
+                });
+            };
+            reader.readAsText(file);
+        }
+
+        document.getElementById('gpxFileInput').addEventListener('change', function(e) {
+            handleGPXFile(e.target.files[0]);
+        });
+
+        // App Init
+        window.onload = function() {
+            addInitialTaiwanBox();
+        };
+    </script>
+</body>
+</html>
